@@ -1,4 +1,4 @@
-# Copyright 2021 Huawei Technologies Co., Ltd
+# Copyright 2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,7 +13,7 @@
 # limitations under the License.
 # ============================================================================
 """
-PanGu predict run
+CodeGeeX predict run
 """
 import json
 
@@ -56,21 +56,18 @@ def inference_text():
     return json.dumps(res_data, indent=4)
 
 
-
-
-def run(MULTI_PROCESS):
-    if MULTI_PROCESS == False:
+def run(multi_process):
+    if not multi_process:
         WSGIServer(('0.0.0.0', 8080), APP).serve_forever()
     else:
-        mulserver = WSGIServer(('0.0.0.0', 8080), APP)
-        mulserver.start()
+        multi_server = WSGIServer(('0.0.0.0', 8080), APP)
+        multi_server.start()
 
         def server_forever():
-            mulserver.start_accepting()
-            mulserver._stop_event.wait()
+            multi_server.start_accepting()
+            multi_server._stop_event.wait()
 
-        # for i in range(cpu_count()):
-        for i in range(1):
+        for _ in range(1):
             p = Process(target=server_forever)
             p.start()
 

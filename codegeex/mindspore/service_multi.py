@@ -1,4 +1,4 @@
-# Copyright 2021 Huawei Technologies Co., Ltd
+# Copyright 2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,22 +13,21 @@
 # limitations under the License.
 # ============================================================================
 """
-PanGu predict run
+CodeGeeX predict run
 """
 
-import re
-import requests
-import tqdm
-from flask import Flask, request
-from threading import Thread
+from multiprocessing import Process
 import json
 import os
 import time
-
-import mindspore.common.dtype as mstype
-import mindspore.communication.management as D
+import requests
+import tqdm
 import moxing as mox
 import numpy as np
+from flask import Flask, request
+from threading import Thread
+import mindspore.common.dtype as mstype
+import mindspore.communication.management as D
 from mindspore import context, Tensor
 from mindspore import export
 from mindspore.context import ParallelMode
@@ -40,8 +39,7 @@ from mindspore.train.serialization import load_checkpoint, load_param_into_net
 
 from gevent import monkey
 from gevent.pywsgi import WSGIServer
-monkey.patch_all(thread=False)
-from multiprocessing import cpu_count, Process
+
 from src.code_tokenizer import CodeTokenizer
 from src.utils import get_args
 from src.pangu_alpha_config import set_parse, PanguAlphaConfig
@@ -49,22 +47,25 @@ from src.pangu_alpha_fp16_predict import EvalNet, PanguAlphaModel
 from src.generate import generate, generate_increment
 
 
+monkey.patch_all(thread=False)
 os.environ["TOKENIZERS_PARALLELISM"] = "true"
 
 # global variable
 model_predict = None
 config = None
 rank = 0
-END_INFO = '\n'+'// Code generation finished, modify code to continue the generation.'
+END_INFO = '\n' + \
+           '// Code generation finished, modify code to continue the generation.'
 
 APP = Flask(__name__)
 
 
 class MyThread(Thread):
     def __init__(self, func, args=()):
-        super(MyThread, self).__init__()
+        super().__init__()
         self.func = func
         self.args = args
+        self.result = None
 
     def run(self):
         self.result = self.func(*self.args)
@@ -72,7 +73,7 @@ class MyThread(Thread):
     def get_result(self):
         try:
             return self.result   # 如果子线程不使用join方法，此处可能会报没有self.result的错误
-        except Exception:
+        except RuntimeError:
             return None
 
 
@@ -83,10 +84,14 @@ def health_func():
 
 @APP.route('/codegeex', methods=['POST'])
 def inference_text():
-    input = request.json
-    samples = input['samples']
-    language = input['language']
-    result, finish = run_predict_single(samples, language, model_predict, config, opt)
+    inputs = request.json
+    samples = inputs['samples']
+    language = inputs['language']
+    result, finish = run_predict_single(samples,
+                                        language,
+                                        model_predict,
+                                        config,
+                                        opt)
     res_data = {
         "result": result,
         "finish": finish
@@ -104,7 +109,7 @@ def download_file(url, name):
     else:
         temp_size = 0
     # 向头加入Range信息
-    headers = {}
+    headers = dict()
     headers['Range'] = 'bytes={}-'.format(temp_size)
     resp = requests.get(url=url, headers=headers, stream=True)
     total_size = int(resp.headers['Content-Length'])
@@ -112,10 +117,13 @@ def download_file(url, name):
 
     print("已下载：", temp_size)
     print("总共需要下载：", total_size)
-    with open(name, "wb") as f:
+    with open(name, "wb") as file:
         print("Pkg total size is:", content_size, 'k,start...')
-        for data in tqdm.tqdm(iterable=resp.iter_content(1024), total=content_size, unit='k', desc=name):
-            f.write(data)
+        for data in tqdm.tqdm(iterable=resp.iter_content(1024),
+                              total=content_size,
+                              unit='k',
+                              desc=name):
+            file.write(data)
         print(name + "download finished!")
     print("total size: ", os.path.getsize(name))
 
@@ -209,7 +217,6 @@ def load_model(args_opt):
     ckpt_name = args_opt.load_ckpt_name
     print("start download=============================")
     download_file(args_opt.load_ckpt_path, ckpt_name)
-    # param_dict = load_checkpoint(os.path.join(args_opt.load_ckpt_path, f"rank_{rank}", ckpt_name))
     print("download success==========================")
     # Define network
     print("Define network")
@@ -230,21 +237,31 @@ def load_model(args_opt):
         inputs_np_1 = Tensor(np.ones(shape=(config.batch_size, 1)), mstype.int32)
         model_predict.predict_network.add_flags_recursive(is_first_iteration=True)
         print("is_first_iteration=True", flush=True)
-        predict_layout = model_predict.infer_predict_layout(inputs_np, current_index, init_true, batch_valid_length)
+        predict_layout = model_predict.infer_predict_layout(inputs_np,
+                                                            current_index,
+                                                            init_true,
+                                                            batch_valid_length)
         model_predict.predict_network.add_flags_recursive(is_first_iteration=False)
         print("is_first_iteration=False", flush=True)
         init_false = Tensor([False], mstype.bool_)
-        _ = model_predict.infer_predict_layout(inputs_np_1, current_index, init_false, batch_valid_length)
+        _ = model_predict.infer_predict_layout(inputs_np_1,
+                                               current_index,
+                                               init_false,
+                                               batch_valid_length)
     else:
-        predict_layout = model_predict.infer_predict_layout(inputs_np, current_index)
+        predict_layout = model_predict.infer_predict_layout(inputs_np,
+                                                            current_index)
+    print(predict_layout)
 
     if context.get_context("save_graphs"):
         print("==============save_graph", flush=True)
         jobid = os.environ["BATCH_JOB_ID"]
         rank_id = rank
         mox.file.make_dirs("s3://wudao-1/yyf/graphs_" + jobid)
-        mox.file.copy_parallel(src_url="/cache/graphs_of_device_id_" + str(rank_id),
-                               dst_url="s3://wudao-1/yyf/graphs_" + jobid + "/" + str(rank_id))
+        mox.file.copy_parallel(src_url="/cache/graphs_of_device_id_"
+                                       + str(rank_id),
+                               dst_url="s3://wudao-1/yyf/graphs_"
+                                       + jobid + "/" + str(rank_id))
     print("======start load_distributed checkpoint", flush=True)
     print("====epoch", args_opt.load_ckpt_epoch)
     if args_opt.load_ckpt_epoch > 0:
@@ -277,11 +294,19 @@ def export_mindir(model_predict, config):
     inputs_np_1 = Tensor(np.ones(shape=(config.batch_size, 1)), mstype.int32)
 
     model_predict.predict_network.add_flags_recursive(is_first_iteration=True)
-    export(model_predict.predict_network, inputs_np, current_index,
-           init_true, batch_valid_length, file_name='pangu_alpha_1024', file_format='MINDIR')
+    export(model_predict.predict_network,
+           inputs_np, current_index,
+           init_true, batch_valid_length,
+           file_name='pangu_alpha_1024',
+           file_format='MINDIR')
     model_predict.predict_network.add_flags_recursive(is_first_iteration=False)
-    export(model_predict.predict_network, inputs_np_1, current_index,
-           init_true, batch_valid_length, file_name='pangu_alpha_1', file_format='MINDIR')
+    export(model_predict.predict_network,
+           inputs_np_1,
+           current_index,
+           init_true,
+           batch_valid_length,
+           file_name='pangu_alpha_1',
+           file_format='MINDIR')
     print("Export finished and now exit.")
 
 
@@ -295,8 +320,6 @@ def run_predict(model_predict, config, args_opt, rank):
     samples = [
         "# language: Python\ndef add(a, b):\n    '''\n    Find the sum of a and b.\n    '''\n",
         "def add(a, b):\n    '''\n    Find the sum of a and b.\n    '''\n",
-        "# language: Python\ndef optimization():\n    '''\n    Find the maximum of P=E**2*R/(R + r)**2 if E and r are fixed but R varies. Import sympy. Use sympy. Find where the derivative is equal to zero. Substitute the value of R into P.\n    '''\n",
-        "from typing import List\n\n\ndef has_close_elements(numbers: List[float], threshold: float) -> bool:\n    \"\"\" Check if in given list of numbers, are any two numbers closer to each other than\n    given threshold.\n    >>> has_close_elements([1.0, 2.0, 3.0], 0.5)\n    False\n    >>> has_close_elements([1.0, 2.8, 3.0, 4.0, 5.0, 2.0], 0.3)\n    True\n    \"\"\"\n",
         "// language: C++\nint add(int a, int b) {\n    /* Find the sum of a and b. */\n",
         "int add(int a, int b) {\n    /* Find the sum of a and b. */\n",
         "bool prime(int n) {\n    // Find whether n is a prime number\n",
@@ -323,8 +346,9 @@ def run_predict(model_predict, config, args_opt, rank):
 
 
 def calcu_space(last_line):
-    for i, c in enumerate(last_line):
-        if c != ' ':
+    i = 0
+    for i, character in enumerate(last_line):
+        if character != ' ':
             break
     if last_line.endswith(':'):
         return i
@@ -362,11 +386,12 @@ def string_processing(sample, language):
 
 def generate_end_info(language):
     annotate = '#' if language == "Python" else "//"
-    end_info = '\n' + annotate + ' Code generation finished, modify code to continue the generation.'
+    end_info = '\n' + annotate \
+               + ' Code generation finished, modify code to continue the generation.'
     return end_info
 
 
-def run_predict_single(sample, language, model_predict, config, args_opt):
+def run_predict_single(sample, language, model, config_info, args_opt):
     """run predict"""
     # Define tokenizer
     tokenizer = CodeTokenizer(mode='6b')
@@ -374,7 +399,7 @@ def run_predict_single(sample, language, model_predict, config, args_opt):
     # preprocessing string
     sample, add_status, space_count = string_processing(sample, language)
 
-    t0 = time.time()
+    time_0 = time.time()
     verbose = False
     tokenized_token = tokenizer.encode_code(sample)
     input_ids = np.array(tokenized_token).reshape(1, -1)
@@ -382,8 +407,8 @@ def run_predict_single(sample, language, model_predict, config, args_opt):
     print(input_ids, flush=True)
 
     # Call inference
-    generate_func = generate_increment if config.use_past else generate
-    output_ids = generate_func(model_predict, input_ids, args_opt, verbose)
+    generate_func = generate_increment if config_info.use_past else generate
+    output_ids = generate_func(model, input_ids, args_opt, verbose)
 
     # Decode output ids to sentence
     output_id_list = output_ids.tolist()
@@ -394,7 +419,7 @@ def run_predict_single(sample, language, model_predict, config, args_opt):
     output_samples = tokenizer.decode_code(output_id_list)
     output_samples_str = "".join(output_samples)
     output_samples_single = output_samples_str.split('\n')[-1]
-    t1 = time.time()
+    time_1 = time.time()
 
     # process result
     if space_count != 0:
@@ -406,28 +431,17 @@ def run_predict_single(sample, language, model_predict, config, args_opt):
 
     print("=== Input ===")
     print(sample, "length:", len(sample), flush=True)
-    print("================================Output All=====================================")
+    print("=========================Output All=============================")
     print(output_samples_str, "length:", len(output_samples_str), flush=True)
     print("=== Output Single ===")
     print(output_samples_single, "length:", len(output_samples_single), flush=True)
     print("=== Time ===")
-    print(t1-t0)
+    print(time_1 - time_0)
 
     if not output_samples_single:
         return generate_end_info(language), "true"
 
     return output_samples_single, "false"
-
-
-def main():
-    """Main process for predict or export model"""
-    opt = get_args(True)
-    set_parse(opt)
-    model_predict, config, rank = load_model(opt)
-    if opt.export:
-        export_mindir(model_predict, config)
-    else:
-        run_predict(model_predict, config, opt, rank)
 
 
 def run_server(multi_process):
@@ -440,16 +454,16 @@ def run_server(multi_process):
     if not multi_process:
         WSGIServer(('0.0.0.0', 8080), APP).serve_forever()
     else:
-        mulserver = WSGIServer(('0.0.0.0', 8080), APP)
-        mulserver.start()
+        multi_server = WSGIServer(('0.0.0.0', 8080), APP)
+        multi_server.start()
 
         def server_forever():
-            mulserver.start_accepting()
-            mulserver._stop_event.wait()
+            multi_server.start_accepting()
+            multi_server._stop_event.wait()
 
-        for i in range(1):
-            p = Process(target=server_forever)
-            p.start()
+        for _ in range(1):
+            process = Process(target=server_forever)
+            process.start()
 
 
 if __name__ == "__main__":

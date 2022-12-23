@@ -41,7 +41,7 @@ RUN pip install multiprocess \
 # 拷贝应用服务代码进镜像里面
 COPY --chown=work:work model /home/model
 
-WORKDIR /home/model
+WORKDIR /home/model/CodeGeex/codegeex/mindspore
 # 制定启i动命令
 # CMD python3 /home/model/CodeGeex/codegeex/mindspore/service.py --end_token 198 --use_past true --distribute false --vocab_size 51200 --mode 13B --micro_size 32 --param_init_type fp16 --per_batch_size 1 --top_p 0.95 --top_k_num 100 --temperature 0.8 --op_level_model_parallel_num 1 --frequency_penalty 0.0 --presence_penalty 0.0 --load_ckpt_name code-13B0-213000-FP16.ckpt --load_ckpt_path https://codegeex.obs.cn-central-221.ovaijisuan.com/checkpoint/code-13B0-213000-FP16.ckpt --load_ckpt_epoch 1 --tokenizer_path /home/model/CodeGeex/codegeex/tokenizer/
 CMD gunicorn -w 2 -k gevent -b 0.0.0.0:8080 -t 1200 CodeGeex.codegeex.mindspore.service_multi:APP
