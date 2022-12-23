@@ -234,7 +234,7 @@ class PanGuHead(Cell):
                 ((parallel_config.data_parallel, 1), (1, 1))
             )
         else:
-            print("====vocab_emb_dp is false", flush=True)
+            # print("====vocab_emb_dp is false", flush=True)
             self.matmul = P.MatMul(transpose_b=True).shard(
                 (
                     (parallel_config.data_parallel, 1),
@@ -275,7 +275,7 @@ def set_parallel_configure_for_layer(
     # the pipeline stage must be in [0, parallel_config.pipeline_stage - 1]
     pp_id = min((layer_id + offset) // pp_dis, parallel_config.pipeline_stage - 1)
     network.pipeline_stage = pp_id
-    print(f"pipeline stage id is {pp_id}", flush=True)
+    # print(f"pipeline stage id is {pp_id}", flush=True)
 
     # Used for optimizer's fusion tag
     dis = max(int((layers + 1) / parallel_config.gradient_aggregation_group), 1)
@@ -387,9 +387,7 @@ class PanguAlpha_Model(Cell):
                   batch_valid_length=None):
         r"""forward pass of the model"""
         embed, word_table = self.embedding(input_ids, input_position, init_reset, batch_valid_length)
-        self.print("PanguAlpha_Model: embed_0", embed)
         hidden_state = P.Cast()(embed, self.dtype)
-        self.print("PanguAlpha_Model: hidden_state_0", embed)
 
         if init_reset is False:
             hidden_state = self.reshape_to_2d(hidden_state)
@@ -397,7 +395,6 @@ class PanguAlpha_Model(Cell):
         if self.blocks is not None:
             for i in range(self.num_layers - 1):
                 hidden_state, _ = self.blocks[i](hidden_state, encoder_masks, init_reset, batch_valid_length)
-                self.print("PanguAlpha_Model: hidden_state_", hidden_state)
         if self.is_pipeline:
             top_query_hidden_states, _ = self.top_query_embedding(input_position)
             top_query_hidden_states = self.reshape_to_2d(top_query_hidden_states)
@@ -412,10 +409,10 @@ class PanguAlpha_Model(Cell):
             top_query_hidden_states = self.reshape_to_2d(top_query_hidden_states)
             encoder_output, _ = self.top_query_layer(encoder_output, top_query_hidden_states,
                                                      encoder_masks, init_reset, batch_valid_length)
-        self.print("PanguAlpha_Model: input_position", input_position)
-        self.print("PanguAlpha_Model: top_query_hidden_state", top_query_hidden_states)
-        self.print("PanguAlpha_Model: encoder_output", encoder_output)
-        self.print("PanguAlpha_Model: word_table", word_table)
+        # self.print("PanguAlpha_Model: input_position", input_position)
+        # self.print("PanguAlpha_Model: top_query_hidden_state", top_query_hidden_states)
+        # self.print("PanguAlpha_Model: encoder_output", encoder_output)
+        # self.print("PanguAlpha_Model: word_table", word_table)
 
         return encoder_output, word_table
 
@@ -451,21 +448,21 @@ class PanguAlpha_Model(Cell):
                                                                                self.config.hidden_size]),
                                                                   name='word_embedding_table', parallel_optimizer=False)
         # self.summary("load_word_embedding", self.embedding.word_embedding.embedding_table)
-        self.print("PanguAlpha_Model: load_word_embedding", self.embedding.word_embedding.embedding_table)
+        # self.print("PanguAlpha_Model: load_word_embedding", self.embedding.word_embedding.embedding_table)
         self.embedding.position_embedding.embedding_table = Parameter(initializer(load_param(position_embedding_path),
                                                                                   [self.config.seq_length,
                                                                                    self.config.hidden_size]),
                                                                       name='position_embedding_table',
                                                                       parallel_optimizer=False)
         # self.summary("load_position_embedding", self.embedding.position_embedding.embedding_table)
-        self.print("PanguAlpha_Model: load_position_embedding", self.embedding.position_embedding.embedding_table)
+        # self.print("PanguAlpha_Model: load_position_embedding", self.embedding.position_embedding.embedding_table)
 
         self.top_query_embedding.embedding_table = Parameter(initializer(load_param(top_query_embedding_path),
                                                                          [self.config.seq_length,
                                                                           self.config.hidden_size]),
                                                              name='query_embedding_table', parallel_optimizer=False)
         # self.summary("top_query_embedding", self.embedding.top_query_embedding.embedding_table)
-        self.print("PanguAlpha_Model: top_query_embedding", self.embedding.top_query_embedding.embedding_table)
+        # self.print("PanguAlpha_Model: top_query_embedding", self.embedding.top_query_embedding.embedding_table)
 
 
 class PanguAlphaModel(nn.Cell):
@@ -500,10 +497,10 @@ class PanguAlphaModel(nn.Cell):
                   init_reset=True, batch_valid_length=None):
         output_states, word_table = self.backbone(input_ids, input_position, attention_mask,
                                                   init_reset, batch_valid_length)
-        self.print("PanguAlphaModel: output_states", output_states)
-        self.print("PanguAlphaModel: word_table", word_table)
+        # self.print("PanguAlphaModel: output_states", output_states)
+        # self.print("PanguAlphaModel: word_table", word_table)
         logits = self.head(output_states, word_table)
-        self.print("PanguAlphaModel: logits", logits)
+        # self.print("PanguAlphaModel: logits", logits)
 
         return logits
 
@@ -595,16 +592,16 @@ class EvalNet(nn.Cell):
             attention_mask = P.Tile()(self.all_ones_attention_mask, (bs, 1, 1))
         else:
             attention_mask = self.get_attention_mask(input_mask)
-        self.print("EvalNet: attention_mask", attention_mask)
+        # self.print("EvalNet: attention_mask", attention_mask)
         input_position = F.tuple_to_array(F.make_range(seq_length))
-        self.print("EvalNet: input_position_0", input_position)
+        # self.print("EvalNet: input_position_0", input_position)
         input_position = P.Tile()(input_position, (bs, 1))
-        self.print("EvalNet: input_position_1", input_position)
+        # self.print("EvalNet: input_position_1", input_position)
         logits = self.backbone(input_ids, input_position, attention_mask,
                                init_reset, batch_valid_length)
-        self.print("EvalNet: logits", logits)
+        # self.print("EvalNet: logits", logits)
         index = current_index.view(-1, )
-        self.print("EvalNet: index", index)
+        # self.print("EvalNet: index", index)
         logits = self.gather(logits, index, 0)
         logits = logits.view(bs, 1, -1)
         log_probs = self.log_softmax(logits)

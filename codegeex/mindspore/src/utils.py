@@ -37,6 +37,7 @@ from mindspore.ops import operations as P
 from mindspore.parallel._auto_parallel_context import auto_parallel_context
 
 
+
 class FP32StateAdamWeightDecay(AdamWeightDecay):
     r"""
         This class is almost same with the mindspore's AdamWeightDecay implements, the
@@ -279,31 +280,31 @@ def add_inference_params(opt):
     """Add inference params"""
     opt.add_argument("--frequency_penalty",
                      type=float,
-                     default=1.5,
+                     default=0.0,
                      help="coefficient for frequency_penalty")
     opt.add_argument("--presence_penalty",
                      type=float,
-                     default=0.3,
+                     default=0.0,
                      help="coefficient for presence_penalty")
     opt.add_argument("--max_generate_length",
                      type=int,
-                     default=2048,
+                     default=150,
                      help="the maximum number of generated token")
     opt.add_argument("--top_k_num",
                      type=int,
-                     default=3,
+                     default=10,
                      help="the number for top_k sampling")
     opt.add_argument("--top_p",
                      type=float,
-                     default=1.0,
+                     default=0.95,
                      help="top_p sampling threshold, enabled if less than 1.0")
     opt.add_argument("--end_token",
                      type=int,
-                     default=50256,
-                     help="the token id for <end of document>")
+                     default=198,
+                     help="the token id for <end of document>, 198: line; 50256:all")
     opt.add_argument("--use_pynative_op",
                      type=int,
-                     default=0,
+                     default=1,
                      help="Whether use pynative op for postproecess")
     opt.add_argument("--use_past",
                      type=str,
@@ -320,7 +321,7 @@ def add_training_params(opt):
                      help="sequence length, default is 2048.")
     opt.add_argument("--vocab_size",
                      type=int,
-                     default=40000,
+                     default=51200,
                      help="vocabulary size, default is 40000.")
     opt.add_argument("--embedding_size",
                      type=int,
@@ -340,7 +341,7 @@ def add_training_params(opt):
                      help="Pipeline stage num, default is 1.")
     opt.add_argument("--micro_size",
                      type=int,
-                     default=1,
+                     default=32,
                      help="Pipeline micro_size, default is 1.")
     opt.add_argument("--eod_reset",
                      type=int,
@@ -386,7 +387,7 @@ def add_training_params(opt):
                      help="Enable optimizer parallel, default is 1")
     opt.add_argument("--per_batch_size",
                      type=int,
-                     default=0,
+                     default=1,
                      help="The batch size for each data parallel way. default 6")
     opt.add_argument("--start_lr",
                      type=float,
@@ -402,7 +403,7 @@ def add_training_params(opt):
                      help="The end learning rate. default 1e-6")
     opt.add_argument("--op_level_model_parallel_num",
                      type=int,
-                     default=8,
+                     default=1,
                      help="The model parallel way. default 8")
     opt.add_argument("--word_emb_dp",
                      type=int, default=1,
@@ -471,28 +472,28 @@ def get_args(inference=False):
                         help="Use device nums, default is 128.")
     parser.add_argument("--distribute",
                         type=str,
-                        default="true",
+                        default="false",
                         choices=["true", "false"],
                         help="Run distribute, default is true.")
     parser.add_argument("--load_ckpt_name",
                         type=str,
-                        default=None,
+                        default='code-13B0-213000-FP16.ckpt',
                         help="checkpint file name.")
     parser.add_argument("--load_ckpt_path",
                         type=str,
-                        default=None,
+                        default="https://codegeex.obs.cn-central-221.ovaijisuan.com/checkpoint/code-13B0-213000-FP16.ckpt",
                         help="checkpoint file path.")
     parser.add_argument("--load_ckpt_epoch",
                         type=int,
-                        default=None,
+                        default=1,
                         help="checkpoint epoch.")
     parser.add_argument('--code_data',
                         type=str,
-                        required=True,
+                        required=False,
                         help='Location of code data.')
     parser.add_argument("--tb_dir",
                         type=str,
-                        required=True,
+                        required=False,
                         help="Location of tensorboard log")
     parser.add_argument("--language",
                         type=str,
@@ -517,7 +518,7 @@ def get_args(inference=False):
                         help="The run type")
     parser.add_argument("--mode",
                         type=str,
-                        default="2.6B",
+                        default="13B",
                         choices=["200B", "13B", "2.6B", "base", "dev", "self_define"],
                         help="The scale of the model parameters")
     parser.add_argument("--device_target",
@@ -531,11 +532,11 @@ def get_args(inference=False):
                         help="The training prallel strategy for the model.")
     parser.add_argument("--tokenizer_path",
                         type=str,
-                        default="./tokenizer_path",
+                        default="/home/model/CodeGeex/codegeex/tokenizer/",
                         help="The path where stores vocab and vocab model file")
     parser.add_argument("--param_init_type",
                         type=str,
-                        default="fp32",
+                        default="fp16",
                         help="The initialization type for parameters. Default fp32.")
     parser.add_argument("--offline",
                         type=int,
@@ -572,15 +573,16 @@ def get_args(inference=False):
     parser.add_argument(
         "--temperature",
         type=float,
-        default=1.0,
+        default=0.8,
         help="Temperature for inference. Default 1.0",
     )
     add_training_params(parser)
     add_retrain_params(parser)
     if inference:
         add_inference_params(parser)
-    args_opt = parser.parse_args()
-
+    # args_opt = parser.parse_args()
+    # args_opt = parser.parse_args(args=[])
+    args_opt, _ = parser.parse_known_args()
     return args_opt
 
 

@@ -1,0 +1,32 @@
+[
+    {
+      "protocol": "https",
+      "url": "/codegeex",
+      "method": "post",
+      "request": {
+        "Content-type": "application/json",
+        "data": {
+          "type": "object",
+          "properties": {
+            "samples": {
+              "type": "string"
+            },
+            "language": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "response": {
+        "Content-type": "application/json",
+        "data": {
+          "type": "object",
+          "properties": {
+            "result": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  ]

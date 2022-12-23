@@ -15,11 +15,9 @@
 """
 PanGu predict run
 """
-import json
 import os
 import time
 
-import mindspore
 import mindspore.common.dtype as mstype
 import mindspore.communication.management as D
 import moxing as mox
@@ -34,8 +32,8 @@ from mindspore.train.model import Model
 from mindspore.train.serialization import load_checkpoint, load_param_into_net
 
 from src.code_tokenizer import CodeTokenizer
-from src.pangu_alpha import EvalNet, PanguAlphaModel
 from src.pangu_alpha_config import set_parse, PanguAlphaConfig
+from src.pangu_alpha_fp16_predict import EvalNet, PanguAlphaModel
 from src.utils import get_args
 
 
@@ -80,8 +78,12 @@ def load_model(args_opt):
     if args_opt.export:
         use_past = True
     # Set model property
+    print("===args_opt: ", args_opt, flush=True)
+    print("===device_num is: ", device_num, flush=True)
+    args_opt.op_level_model_parallel_num = 1
     model_parallel_num = args_opt.op_level_model_parallel_num
     data_parallel_num = int(device_num / model_parallel_num)
+    print("===data_parallel_num is: ", data_parallel_num, flush=True)
 
     parallel_config = TransformerOpParallelConfig(data_parallel=data_parallel_num,
                                                   model_parallel=model_parallel_num,
@@ -93,6 +95,9 @@ def load_model(args_opt):
 
     per_batch_size = args_opt.per_batch_size
     batch_size = per_batch_size * data_parallel_num
+
+    if args_opt.run_type == "predict":
+        batch_size = 1
     config = PanguAlphaConfig(
         batch_size=batch_size,
         seq_length=args_opt.seq_length,
@@ -122,12 +127,12 @@ def load_model(args_opt):
     model_predict = Model(eval_net)
     # Compile network and obtain tensor layout for loading ckpt
     inputs_np = Tensor(np.ones(shape=(config.batch_size, config.seq_length)), mstype.int32)
-    current_index = Tensor(np.array([0 for _ in range(batch_size)]), mstype.int32)
+    current_index = Tensor(np.array([0]), mstype.int32)
 
     if args_opt.distribute == "false":
         predict_layout = None
     elif config.use_past:
-        batch_valid_length = Tensor(np.array([0 for _ in range(batch_size)]), mstype.int32)
+        batch_valid_length = Tensor(np.array([0]), mstype.int32)
         init_true = Tensor([True], mstype.bool_)
         print("Input shape:", inputs_np.shape, flush=True)
         inputs_np_1 = Tensor(np.ones(shape=(config.batch_size, 1)), mstype.int32)
@@ -150,25 +155,27 @@ def load_model(args_opt):
                                dst_url="s3://wudao-1/yyf/graphs_" + jobid + "/" + str(rank_id))
     print("======start load_distributed checkpoint", flush=True)
     if args_opt.load_ckpt_epoch > 0:
-        time.sleep(rank * 0.1)
-        os.mkdir(os.path.join(args_opt.save_checkpoint_path, f"rank_{rank}"))
-        ckpt_name = f"code-13B{rank}-{args_opt.load_ckpt_epoch}.ckpt"
-        if not mox.file.exists(os.path.join(args_opt.load_ckpt_path, f"rank_{rank}", ckpt_name)):
-            print(f"Checkpoint from rank {rank} doesn't exist!")
-        mox.file.copy(os.path.join(args_opt.load_ckpt_path, f"rank_{rank}", ckpt_name),
-                      os.path.join(args_opt.save_checkpoint_path, f"rank_{rank}", ckpt_name))
-        param_dict = load_checkpoint(os.path.join(args_opt.save_checkpoint_path, f"rank_{rank}", ckpt_name))
-        if param_dict.get("epoch_num") and param_dict.get("step_num"):
-            args_opt.has_trained_epoches = int(param_dict["epoch_num"].data.asnumpy())
-            args_opt.has_trained_steps = int(param_dict["step_num"].data.asnumpy())
-        os.mkdir(f'/home/work/sfs/cache/{os.environ["BATCH_JOB_ID"]}/1/rank_{rank}')
-        while True:
-            num = len(os.listdir(f'/home/work/sfs/cache/{os.environ["BATCH_JOB_ID"]}/1'))
-            if num == device_num:
-                break
-            if rank % 8 == 0:
-                print("Loaded ckpt in step 1: ", num)
-            time.sleep(1)
+        time.sleep(rank * 0.5)
+        # if not mox.file.exists(os.path.join(args_opt.save_checkpoint_path, f"rank_{rank}")):
+        #     os.mkdir(os.path.join(args_opt.save_checkpoint_path, f"rank_{rank}"))
+        # ckpt_name = f"code-13B0-{args_opt.load_ckpt_epoch}.ckpt"
+        # if not mox.file.exists(os.path.join(args_opt.load_ckpt_path, f"rank_{rank}", ckpt_name)):
+        #     print(f"Checkpoint from rank {rank} doesn't exist!")
+        # mox.file.copy(os.path.join(args_opt.load_ckpt_path, f"rank_{rank}", ckpt_name),
+        #               os.path.join(args_opt.save_checkpoint_path, f"rank_{rank}", ckpt_name))
+        param_dict = load_checkpoint(os.path.join(args_opt.load_ckpt_path, f"rank_{rank}", ckpt_name))
+        # TODO: add them back if not for the 1st run!
+        # if param_dict.get("epoch_num") and param_dict.get("step_num"):
+        #     args_opt.has_trained_epoches = int(param_dict["epoch_num"].data.asnumpy())
+        #     args_opt.has_trained_steps = int(param_dict["step_num"].data.asnumpy())
+        # os.mkdir(f'/home/work/sfs/cache/{os.environ["BATCH_JOB_ID"]}/1/rank_{rank}')
+        # while True:
+        #     num = len(os.listdir(f'/home/work/sfs/cache/{os.environ["BATCH_JOB_ID"]}/1'))
+        #     if num == device_num:
+        #         break
+        #     if rank % 8 == 0:
+        #         print("Loaded ckpt in step 1: ", num)
+        #     time.sleep(1)
         net_not_load = load_param_into_net(pangu_alpha, param_dict)
         print("====== load_distributed checkpoint done, net_not_load: ", net_not_load, flush=True)
     return model_predict, config, rank
@@ -194,57 +201,79 @@ def export_mindir(model_predict, config):
 
 def run_predict(model_predict, config, args_opt, rank):
     """run predict"""
-    from src.generate_humaneval import generate_increment
+    from src.generate import generate, generate_increment
     # Define tokenizer
     tokenizer = CodeTokenizer(mode='6b')
 
     # Tokenize input sentence to ids
-    humaneval_path = '/home/work/sfs/xx/human_eval_x/data/humaneval_cpp.jsonl'  # TODO: set as current humaneval path
-    humaneval = open(humaneval_path, 'r').readlines()
-    humaneval = [json.loads(task) for task in humaneval if len(task) != 0]
-    samples = [task['prompt'] for task in humaneval]
-    generations = []
-    batch_size = config.batch_size
-    verbose = (rank % 8 == 0)
-    part = int(args_opt.part)
-    gen_times = 12 # TODO: set as generation times of current task
-    print(f"gen times: {gen_times}, part: {part}")
-    save_path = f'/home/work/sfs/xx/pangu_alpha_code/generation_humanevalx/cpp/epoch_6_7375_temp_{args_opt.temperature}/samples_{args_opt.load_ckpt_epoch}_part_{part}.jsonl'  # TODO: set as current save path
-    if rank == 0 and not os.path.exists(save_path):
-        os.makedirs(os.path.split(save_path)[0], exist_ok=True)
-        f = open(save_path, 'w')
-        f.close()
-        os.system(f'sudo chmod 777 {save_path}')
+    samples = [
+        "# language: Python\ndef add(a, b):\n    '''\n    Find the sum of a and b.\n    '''\n",
+        "def add(a, b):\n    '''\n    Find the sum of a and b.\n    '''\n",
+        "# language: Python\ndef optimization():\n    '''\n    Find the maximum of P=E**2*R/(R + r)**2 if E and r are fixed but R varies. Import sympy. Use sympy. Find where the derivative is equal to zero. Substitute the value of R into P.\n    '''\n",
+        "from typing import List\n\n\ndef has_close_elements(numbers: List[float], threshold: float) -> bool:\n    \"\"\" Check if in given list of numbers, are any two numbers closer to each other than\n    given threshold.\n    >>> has_close_elements([1.0, 2.0, 3.0], 0.5)\n    False\n    >>> has_close_elements([1.0, 2.8, 3.0, 4.0, 5.0, 2.0], 0.3)\n    True\n    \"\"\"\n",
+        "// language: C++\nint add(int a, int b) {\n    /* Find the sum of a and b. */\n",
+        "int add(int a, int b) {\n    /* Find the sum of a and b. */\n",
+        "bool prime(int n) {\n    // Find whether n is a prime number\n",
+        "// language: JavaScript\nfunction add(a, b) {\n    // Find the sum of a and b.\n",
+        "# language: R\nadd<-function(a, b) {\n    # Find the sum of a and b.\n",
+    ]
+    # verbose = (rank == 0)
+    verbose = False
     for i, sample in enumerate(samples):
-        tag = "// language: C++\n"
-        sample = tag + sample
-        if rank % 8 == 0:
-            print(f"=================== prompt {i} ====================")
-            print(sample, flush=True)
-        for j in range((gen_times + batch_size - 1) // batch_size):
+        for _ in range(1):
             tokenized_token = tokenizer.encode_code(sample)
-            input_ids = np.array(tokenized_token).reshape(1, -1).repeat(batch_size, axis=0)
+            input_ids = np.array(tokenized_token).reshape(1, -1)
             # Call inference
-            mindspore.set_seed(j + 8 * part)
-            generate_func = generate_increment
+            generate_func = generate_increment if config.use_past else generate
             t0 = time.perf_counter()
-            output_ids = generate_func(model_predict, input_ids, args_opt, tokenizer, verbose)
+            output_ids = generate_func(model_predict, input_ids, args_opt, verbose)
+            # Decode output ids to sentence
             t1 = time.perf_counter()
+            output_samples = tokenizer.decode_code(output_ids.tolist())
+            output_samples_str = "".join(output_samples)
             if rank % 8 == 0:
-                print(f"=== Batch time: {t1 - t0}s")
-                for k, out in enumerate(output_ids):
-                    print(f"=================== generation {j * batch_size + k} ====================")
-                    print(out, flush=True)
-                    generations.append(json.dumps({'task_id': humaneval[i]['task_id'], 'completion': out}))
-                    if rank == 0:
-                        f = open(save_path, 'a')
-                        f.write(generations[-1] + '\n')
-                        f.close()
+                print(f"=================== prompt {i} ====================")
+                print(sample, flush=True)
+                print(f"=================== generation {i} ====================")
+                print(output_samples_str, flush=True)
+                print(
+                    f"=== Total time (s): {t1 - t0}, {output_ids.shape[-1] - input_ids.shape[-1]} tokens, {(output_ids.shape[-1] - input_ids.shape[-1]) / (t1 - t0)} token/s")
+        break
 
+
+def run_predict_single(sample, model_predict, config, args_opt, rank):
+    """run predict"""
+    from src.generate import generate, generate_increment
+    # Define tokenizer
+    tokenizer = CodeTokenizer(mode='6b')
+
+    # Tokenize input sentence to ids
+
+    # verbose = (rank == 0)
+    verbose = False
+    tokenized_token = tokenizer.encode_code(sample)
+    input_ids = np.array(tokenized_token).reshape(1, -1)
+    # Call inference
+    generate_func = generate_increment if config.use_past else generate
+    t0 = time.perf_counter()
+    output_ids = generate_func(model_predict, input_ids, args_opt, verbose)
+    # Decode output ids to sentence
+    t1 = time.perf_counter()
+    output_samples = tokenizer.decode_code(output_ids.tolist())
+    output_samples_str = "".join(output_samples)
+
+    print(sample, flush=True)
+    print(output_samples_str, flush=True)
+    print(
+        f"=== Total time (s): {t1 - t0}, {output_ids.shape[-1] - input_ids.shape[-1]} tokens, {(output_ids.shape[-1] - input_ids.shape[-1]) / (t1 - t0)} token/s")
+    return output_samples_str
+
+def test_tokenizer():
+
+    tokenizer = CodeTokenizer(mode='6b')
 
 def main():
     """Main process for predict or export model"""
-    print("===Enter main!")
     opt = get_args(True)
     set_parse(opt)
     model_predict, config, rank = load_model(opt)

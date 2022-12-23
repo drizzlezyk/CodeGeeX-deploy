@@ -16,6 +16,7 @@
 """
 TopK for text generation
 """
+import time
 
 import mindspore.common.dtype as mstype
 import numpy as np
@@ -111,8 +112,8 @@ def generate(model, origin_inputs, config, verbose=False):
 
     # If target length exceeds seq_length, use seq_length instead
     target_length = valid_length + max_generate_length
-    target_length = seq_length if target_length > seq_length else target_length
-
+    # target_length = seq_length if target_length > seq_length else target_length
+    target_length = 512 if target_length > 512 else target_length
     # A list of the frequency of each token
     frequency_list = np.array([[0 for _ in range(vocab_embedding_vocab_size)]])
     pad_length = seq_length - origin_inputs.shape[-1]
@@ -216,15 +217,16 @@ def generate_increment(model, origin_inputs, config, verbose=False):
     init = init_false
     # Claim the first graph
     model.predict_network.add_flags_recursive(is_first_iteration=True)
+    print("! ========Input Shape========:", input_ids.shape, flush=True)
     # Call a single inference with input size of (bs, seq_length)
     logits = model.predict(Tensor(input_ids, mstype.int32),
                            current_index, init, batch_valid_length)
-
     # Claim the second graph and set not_init to true
     init = init_true
     model.predict_network.add_flags_recursive(is_first_iteration=False)
 
     # A single loop generates one token, loop until reaching target seq_length or generating eod token
+    t0 = time.time()
     while valid_length < target_length:
         # Reshape the output logits
         logits = logits.asnumpy()
@@ -234,8 +236,10 @@ def generate_increment(model, origin_inputs, config, verbose=False):
         log_probs_revised = log_probs - frequency_list * \
                             frequency_penalty - (frequency_list > 0) * presence_penalty
         log_probs_revised /= temperature
-
+        # t00 = time.time()
         p, p_args = sampler(log_probs_revised, top_p, top_k_num, use_pynative)
+        # t11 = time.time()
+        # print("! ======sample time ========:", t11-t00)
         # Random select a token as final output for this round
         target_index = np.random.choice(len(p), p=p)
 
@@ -246,8 +250,9 @@ def generate_increment(model, origin_inputs, config, verbose=False):
             print(f"=== Length {valid_length}, target index {target_index}, chosen token {p_args[target_index]}.")
 
         # Stop judgment
-        if p_args[target_index] == end_token or valid_length == target_length - 1:
-            break
+        if p_args[target_index] == end_token:
+            # Return valid outputs when reach end token
+            return np.array(outputs)
 
         # Update frequency list
         target = p_args[target_index]
@@ -260,9 +265,12 @@ def generate_increment(model, origin_inputs, config, verbose=False):
 
         # Update outputs with current generated token
         outputs.append(int(target))
-
+        # print("! ========Input ID Shape========:", input_id.shape, flush=True)
         # Call a single inference with input size of (bs, 1)
         logits = model.predict(input_id, current_index,
                                init, batch_valid_length)
+    t1 = time.time()
+    print("! ======total predict time ========:", t1-t0)
     # Return valid outputs out of padded outputs
+    outputs.append(198)
     return np.array(outputs)
